@@ -33,20 +33,15 @@ export function useSpinHistory(userId?: number) {
   const BACKEND_URL = (import.meta as any)?.env?.VITE_BACKEND_URL || "";
 
   return useQuery({
-    queryKey: ["/slots/history", userId],
+    queryKey: ["/api/user-spins", userId],
     queryFn: async () => {
       if (!userId) return [];
-      const initData = getInitData();
-      const res = await fetch(`${BACKEND_URL}/slots/history?user_id=${userId}&limit=1`, {
-        headers: {
-          "Authorization": `tma ${initData}`
-        }
-      });
+      const res = await fetch(`${BACKEND_URL}/api/user-spins/${userId}`);
       if (!res.ok) throw new Error("Failed to fetch history");
       const data = await res.json();
-      return data.history;
+      return data.spins || [];
     },
     enabled: !!userId,
-    refetchInterval: 1000,
+    refetchInterval: 2000,
   });
 }

@@ -23,4 +23,5 @@ export interface User {
   username?: string;
   photo_url?: string;
   language_code?: string;
+  balance?: string;
 }

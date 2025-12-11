@@ -39,10 +39,11 @@ function App() {
       try {
         const tg = mod.initTelegram();
         // expose helper on window for debugging
+        // UPDATED: Use available functions from the new telegram.ts API
         (window as any).__TG_HELPER__ = {
-          createAndOpenInvoice: mod.createAndOpenInvoice,
-          createSlotInvoice: mod.createSlotInvoice,
-          openInvoiceUrl: mod.openInvoiceUrl,
+          createInvoice: (mod as any).createInvoice,
+          // openInvoice might not be exported directly if logic moved, 
+          // but we map what we can found or just tgInstance
           tgInstance: tg,
         };
         // small console hint

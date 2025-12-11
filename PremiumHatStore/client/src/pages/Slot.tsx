@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef } from "react";
 import { Header } from "@/components/Header";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -7,14 +7,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Sparkles, TrendingUp, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUser } from "@/hooks/useUser";
-import { useSpins, useSpinHistory } from "@/hooks/useSpins";
+import { useSpins } from "@/hooks/useSpins";
 import { useToast } from "@/hooks/use-toast";
 import confetti from "canvas-confetti";
-import { createAndOpenInvoice } from "@/lib/telegram";
+import { createInvoice, openInvoice } from "@/lib/telegram";
 
 const SPIN_COSTS = [50, 100, 200];
-
 const SLOT_SYMBOLS = ["🍭", "🍬", "🧁", "🍿", "🍦"];
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 
 export default function Slot() {
   const [selectedCost, setSelectedCost] = useState(50);
@@ -25,31 +25,10 @@ export default function Slot() {
   const { data: user } = useUser();
   const { data: recentSpins } = useSpins(false, 10);
   const { data: mySpins } = useSpins(true, 10);
-  const { data: history } = useSpinHistory(user ? parseInt(user.id) : undefined);
-  const [lastProcessedSpinId, setLastProcessedSpinId] = useState<number | null>(null);
-
+  
   const { toast } = useToast();
 
-  // Initialize lastProcessedSpinId
-  useEffect(() => {
-    if (history && history.length > 0 && lastProcessedSpinId === null) {
-      setLastProcessedSpinId(history[0].id);
-    }
-  }, [history]);
-
-  // Watch for new spins from polling
-  useEffect(() => {
-    if (!isSpinning || !history || history.length === 0) return;
-
-    const latest = history[0];
-    // If we have a new spin (id > last processed)
-    if (lastProcessedSpinId !== null && latest.id > lastProcessedSpinId) {
-      finishSpin(latest);
-      setLastProcessedSpinId(latest.id);
-    }
-  }, [history, isSpinning, lastProcessedSpinId]);
-
-  const finishSpin = (result: any) => {
+  const finishSpinAnimation = (result: any) => {
     if (spinIntervalRef.current) {
       clearInterval(spinIntervalRef.current);
       spinIntervalRef.current = null;
@@ -57,55 +36,106 @@ export default function Slot() {
 
     const resultSymbols = result.symbols || ["❓", "❓", "❓"];
     setSymbols(resultSymbols);
+    setIsSpinning(false);
 
-    if (result.win_amount > 0) {
+    if (result.isWin) {
       // @ts-ignore
       confetti({
-        particleCount: 100,
+        particleCount: 150,
         spread: 70,
         origin: { y: 0.6 },
       });
 
-      toast({
-        title: "You won!",
-        description: `Prize: ${result.win_amount} stars!`,
-      });
+      if (result.wonGift) {
+        toast({
+          title: "🎉 JACKPOT! 🎉",
+          description: `You won: ${result.wonGift.name}! Check your Inventory.`,
+          duration: 5000,
+          className: "bg-green-600 text-white"
+        });
+      } else {
+         // Случай, когда выиграл, но подарка не нашлось (fallback)
+         toast({
+          title: "You Won!",
+          description: `Prize: ${result.winAmount} stars!`,
+        });
+      }
     } else {
       toast({
-        title: "No luck",
+        title: "No luck this time",
         description: "Try again!",
       });
     }
+  };
 
-    setIsSpinning(false);
+  const startPolling = (sessionId: string) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/spin-status/${sessionId}`);
+        const data = await res.json();
+
+        if (data.status === 'COMPLETED' && data.result) {
+          clearInterval(pollInterval);
+          finishSpinAnimation(data.result);
+        } else if (data.status === 'FAILED') {
+           clearInterval(pollInterval);
+           setIsSpinning(false);
+           toast({ title: "Server Error", variant: "destructive" });
+        }
+        // If status is PAID or CREATED - continue waiting
+      } catch (e) {
+        console.error("Polling error", e);
+      }
+    }, 2000);
+
+    // Timeout after 30 seconds
+    setTimeout(() => {
+        clearInterval(pollInterval);
+        if (isSpinning) {
+            setIsSpinning(false);
+            toast({ title: "Timeout", description: "Check your history later" });
+        }
+    }, 30000);
   };
 
   const handleSpin = async () => {
     if (!user) return;
+    setIsSpinning(true);
+
+    // Start visual spinning
+    if (spinIntervalRef.current) clearInterval(spinIntervalRef.current);
+    spinIntervalRef.current = setInterval(() => {
+      setSymbols([
+        SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)],
+        SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)],
+        SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)],
+      ]);
+    }, 100);
 
     try {
-      // Create and open invoice
-      await createAndOpenInvoice(selectedCost, parseInt(user.id));
+      // 1. Create session on server
+      const { invoiceUrl, sessionId } = await createInvoice(parseInt(user.id), selectedCost, 'spin');
 
-      setIsSpinning(true);
-      toast({
-        title: "Payment Started",
-        description: "Please complete payment in Telegram to spin.",
+      // 2. Open invoice
+      // @ts-ignore
+      window.Telegram.WebApp.openInvoice(invoiceUrl, (status: string) => {
+        if (status === 'paid') {
+            toast({ title: "Payment sent!", description: "Waiting for server result..." });
+            startPolling(sessionId);
+        } else if (status === 'cancelled') {
+            setIsSpinning(false);
+            if (spinIntervalRef.current) clearInterval(spinIntervalRef.current);
+            toast({ title: "Cancelled", variant: "destructive" });
+        } else {
+            setIsSpinning(false);
+            if (spinIntervalRef.current) clearInterval(spinIntervalRef.current);
+            toast({ title: "Payment failed", variant: "destructive" });
+        }
       });
-
-      // Start visual spinning
-      if (spinIntervalRef.current) clearInterval(spinIntervalRef.current);
-
-      spinIntervalRef.current = setInterval(() => {
-        setSymbols([
-          SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)],
-          SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)],
-          SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)],
-        ]);
-      }, 100);
 
     } catch (error: any) {
       setIsSpinning(false);
+      if (spinIntervalRef.current) clearInterval(spinIntervalRef.current);
       toast({
         title: "Error",
         description: error.message || "Failed to create invoice",
@@ -198,7 +228,7 @@ export default function Slot() {
                   {recentSpins.map((spin) => (
                     <Card key={spin.id} className="p-3 flex items-center justify-between">
                       <span className="text-sm text-muted-foreground">
-                        Win: {spin.cost} coins
+                        Win: {spin.result?.win_amount || 0} coins
                       </span>
                       <Badge variant="secondary">
                         {new Date(spin.createdAt).toLocaleTimeString()}
@@ -221,9 +251,9 @@ export default function Slot() {
                   {mySpins.map((spin) => (
                     <Card key={spin.id} className="p-3 flex items-center justify-between">
                       <span className="text-sm">
-                        {spin.isWin ? "🎉 Won" : "Lost"} - {spin.cost} coins
+                        {spin.result?.isWin ? "🎉 Won" : "Lost"} - {spin.result?.win_amount || 0} coins
                       </span>
-                      <Badge variant={spin.isWin ? "default" : "secondary"}>
+                      <Badge variant={spin.result?.isWin ? "default" : "secondary"}>
                         {new Date(spin.createdAt).toLocaleTimeString()}
                       </Badge>
                     </Card>
