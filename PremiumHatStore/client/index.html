@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#212121" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <title>Battles - Telegram Game</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script>
+      (function () {
+        // Read Telegram WebApp CSS vars (if present), convert colors to HSL triplets
+        // and apply them to the project's CSS variables that Tailwind expects.
+        const root = document.documentElement;
+
+        function hexToRgb(hex) {
+          hex = hex.replace('#', '');
+          if (hex.length === 3) {
+            hex = hex.split('').map(c => c + c).join('');
+          }
+          const bigint = parseInt(hex, 16);
+          return [ (bigint >> 16) & 255, (bigint >> 8) & 255, bigint & 255 ];
+        }
+
+        function rgbStringToRgb(str) {
+          const m = str.match(/rgba?\(([^)]+)\)/);
+          if (!m) return null;
+          return m[1].split(',').slice(0,3).map(s=>parseInt(s.trim(),10));
+        }
+
+        function rgbToHsl(r,g,b){
+          r /= 255; g /= 255; b /= 255;
+          const max = Math.max(r,g,b), min = Math.min(r,g,b);
+          let h, s, l = (max + min) / 2;
+          if (max === min) { h = s = 0; }
+          else {
+            const d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            switch(max){
+              case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+              case g: h = (b - r) / d + 2; break;
+              case b: h = (r - g) / d + 4; break;
+            }
+            h /= 6;
+          }
+          return [ Math.round(h * 360), Math.round(s * 100), Math.round(l * 100) ];
+        }
+
+        function parseColorToHslTriplet(val) {
+          if (!val) return null;
+          val = val.trim();
+          // handle hex
+          if (val.startsWith('#')) {
+            const [r,g,b] = hexToRgb(val);
+            return rgbToHsl(r,g,b).join(' ');
+          }
+          // handle rgb(a)
+          if (val.startsWith('rgb')) {
+            const rgb = rgbStringToRgb(val);
+            if (rgb) return rgbToHsl(rgb[0], rgb[1], rgb[2]).join(' ');
+          }
+          // handle hsl(...) -> return as 'h s% l%'
+          if (val.startsWith('hsl')) {
+            const m = val.match(/hsl\(([^)]+)\)/);
+            if (m) {
+              const parts = m[1].split(',').map(p=>p.trim());
+              // normalize spaces and percent signs
+              const h = parts[0].replace('deg','').trim();
+              const s = parts[1].replace('%','').trim();
+              const l = parts[2].replace('%','').trim();
+              return `${h} ${s} ${l}`;
+            }
+          }
+          return null;
+        }
+
+        function applyTelegramVars() {
+          try {
+            const style = getComputedStyle(root);
+            const map = [
+              ['--tg-theme-bg-color', '--background'],
+              ['--tg-theme-text-color', '--foreground'],
+              ['--tg-theme-button-color', '--primary'],
+              ['--tg-theme-button-text-color', '--primary-foreground'],
+              ['--tg-theme-hint-color', '--muted-foreground']
+            ];
+            let applied = false;
+            for (const [tg, our] of map) {
+              const v = style.getPropertyValue(tg).trim();
+              if (!v) continue;
+              const hsl = parseColorToHslTriplet(v);
+              if (hsl) {
+                root.style.setProperty(our, hsl);
+                applied = true;
+              } else {
+                // if cannot convert to HSL triplet, set as direct color fallback for simple properties
+                root.style.setProperty(our, v);
+                applied = true;
+              }
+            }
+            return applied;
+          } catch (e) {
+            // ignore
+            return false;
+          }
+        }
+
+        function init() {
+          // Try once immediately
+          const ok = applyTelegramVars();
+          // If Telegram WebApp is available, listen for theme changes
+          if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.onEvent) {
+            try {
+              window.Telegram.WebApp.onEvent('themeChanged', applyTelegramVars);
+            } catch (e) {
+              // no-op
+            }
+          }
+          // Also try after DOMContentLoaded in case variables attach later
+          document.addEventListener('DOMContentLoaded', applyTelegramVars);
+        }
+
+        init();
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

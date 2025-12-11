@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "tailwind-merge": "^3.4.0",
+    "tanstack": "^1.0.2",
+    "twa-dev": "^1.0.0"
+  }
+}
