@@ -70,7 +70,7 @@ export async function createAndOpenInvoice(betAmount: number, userId?: number, o
     const { invoice_url } = await createSlotInvoice(betAmount, userId);
     openInvoiceUrl(invoice_url, onStatus);
   } catch (error) {
-    console.error('Error creating invoice:', error);
+    console.error('Error creating  invoice:', error);
     throw error;
   }
 }
