@@ -15,11 +15,14 @@ export function initTelegram() {
   tg.ready();
   tg.expand();
   
-  // Set theme params if needed
+  // Set theme params
   document.documentElement.style.setProperty('--tg-theme-bg-color', tg.backgroundColor);
   document.documentElement.style.setProperty('--tg-theme-text-color', tg.textColor);
   document.documentElement.style.setProperty('--tg-theme-button-color', tg.buttonColor);
   document.documentElement.style.setProperty('--tg-theme-button-text-color', tg.buttonTextColor);
+  document.documentElement.style.setProperty('--tg-theme-hint-color', tg.hintColor);
+  document.documentElement.style.setProperty('--tg-theme-link-color', tg.linkColor);
+  document.documentElement.style.setProperty('--tg-theme-secondary-bg-color', tg.secondaryBackgroundColor);
   
   return tg;
 }
@@ -29,48 +32,37 @@ export function getInitData() {
 }
 
 export interface InvoiceResponse {
-  invoice_url: string;
+  invoiceUrl: string;
+  sessionId: string;
 }
 
-export async function createSlotInvoice(betAmount: number, userId?: number): Promise<InvoiceResponse> {
-  const response = await fetch(`${BACKEND_URL}/slots/create-invoice`, {
+export async function createInvoice(userId: number, amount: number, type: 'spin' | 'item' = 'spin', itemData?: any): Promise<InvoiceResponse> {
+  const response = await fetch(`${BACKEND_URL}/api/create-invoice`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      bet_amount: betAmount,
-      user_id: userId,
+      userId,
+      amount,
+      type,
+      itemData
     }),
   });
 
   if (!response.ok) {
-    throw new Error('Failed to create invoice');
+    const err = await response.json();
+    throw new Error(err.error || 'Failed to create invoice');
   }
 
   return response.json();
 }
 
-export function openInvoiceUrl(invoiceUrl: string, onStatus?: (status: string) => void) {
-  const tg = window.Telegram.WebApp;
-  
-  if (tg.openInvoice) {
-    tg.openInvoice(invoiceUrl, (status: string) => {
-      if (onStatus) onStatus(status);
+export async function openInvoice(invoiceUrl: string) {
+    const tg = window.Telegram.WebApp;
+    return new Promise((resolve) => {
+        tg.openInvoice(invoiceUrl, (status: string) => {
+            resolve(status);
+        });
     });
-  } else {
-    // Fallback for development / non-Telegram environment
-    window.open(invoiceUrl, '_blank');
-    if (onStatus) onStatus('opened_in_browser');
-  }
-}
-
-export async function createAndOpenInvoice(betAmount: number, userId?: number, onStatus?: (status: string) => void) {
-  try {
-    const { invoice_url } = await createSlotInvoice(betAmount, userId);
-    openInvoiceUrl(invoice_url, onStatus);
-  } catch (error) {
-    console.error('Error creating  invoice:', error);
-    throw error;
-  }
 }
