@@ -102,6 +102,33 @@ const PRIZE_RANGES: any = {
     // ... для 200
 };
 
+// --- DATABASE HELPERS ---
+const readGifts = () => readJSON(GIFTS_FILE);
+const writeGifts = (data: any) => writeJSON(GIFTS_FILE, data);
+
+// --- НОВАЯ ЛОГИКА: Вывод подарков ---
+async function processWithdrawal(userId: number, giftIds: string[]) {
+    const gifts = readGifts();
+    const giftsToSend = [];
+
+    // Проверяем и обновляем статус
+    for (const id of giftIds) {
+        const gift = gifts.find((g: any) => g.id === id && g.ownerId == userId && g.status === 'owned');
+        if (gift) {
+            gift.status = 'withdrawn';
+            giftsToSend.push(gift);
+        }
+    }
+
+    if (giftsToSend.length > 0) {
+        writeGifts(gifts);
+        // Здесь логика отправки реального Gift (через API Telegram)
+        // Пока просто уведомляем
+        return giftsToSend;
+    }
+    return [];
+}
+
 // Find a gift in DB
 function assignGift(userId: number | string, bet: number, symbolType: string) {
     const range = PRIZE_RANGES[bet]?.[symbolType];
@@ -207,61 +234,70 @@ bot.on(message("successful_payment"), async (ctx) => {
     const payment = ctx.message.successful_payment;
     
     try {
-        // Достаем sessionId из payload
         const payload = JSON.parse(payment.invoice_payload);
-        const { sessionId } = payload;
+        const { sessionId, type, giftIds } = payload;
         
         const session = spinSessions[sessionId];
-        if (!session) {
-            console.error("Session not found for payment:", sessionId);
-            return; // Деньги списались, а сессии нет. Тут нужен механизм возврата или логирования для поддержки.
+        if (!session && type === 'spin') { 
+             console.error("Spin session missing"); return; 
         }
 
-        // Обновляем статус
-        session.status = 'PAID';
+        // === SCENARIO 1: SPIN ===
+        if (type === 'spin' && session) {
+            session.status = 'PAID';
 
-        // --- ЗАПУСК ИГРОВОЙ ЛОГИКИ ---
-        
-        // 1. Кидаем дайс в канал
-        if (!CHANNEL_ID) throw new Error("No Channel ID");
-        const diceMsg = await ctx.telegram.sendDice(CHANNEL_ID, { emoji: "🎰" });
-        const diceValue = diceMsg.dice.value;
+            // --- ЗАПУСК ИГРОВОЙ ЛОГИКИ ---
+            
+            // 1. Кидаем дайс в канал
+            if (!CHANNEL_ID) throw new Error("No Channel ID");
+            const diceMsg = await ctx.telegram.sendDice(CHANNEL_ID, { emoji: "🎰" });
+            const diceValue = diceMsg.dice.value;
 
-        // 2. Считаем выигрыш (твоя логика маппинга)
-        const symbols = diceValueToSymbols(diceValue); 
-        // Пример простой проверки:
-        const isWin = new Set(symbols).size === 1; 
-        const winAmount = isWin ? session.betAmount * 10 : 0; // Тут твоя логика коэффициентов
+            // 2. Считаем выигрыш (твоя логика маппинга)
+            const symbols = diceValueToSymbols(diceValue); 
+            // Пример простой проверки:
+            const isWin = new Set(symbols).size === 1; 
+            const winAmount = isWin ? session.betAmount * 10 : 0; // Тут твоя логика коэффициентов
 
-        let wonGift = null;
-        if (isWin) {
-            // Пытаемся выдать подарок
-            // Предположим, что 64 это '777'
-            // Для теста используем "777" если выиграл, или определяем тип символа
-            const symbolType = getSymbolType(diceValue) || "777"; // Fallback to 777 for test if win
-            wonGift = assignGift(session.userId, session.betAmount, symbolType);
+            let wonGift = null;
+            if (isWin) {
+                // Пытаемся выдать подарок
+                // Предположим, что 64 это '777'
+                // Для теста используем "777" если выиграл, или определяем тип символа
+                const symbolType = getSymbolType(diceValue) || "777"; // Fallback to 777 for test if win
+                wonGift = assignGift(session.userId, session.betAmount, symbolType);
+            }
+
+            // 4. Финализируем сессию
+            session.result = {
+                diceValue,
+                symbols,
+                isWin,
+                winAmount,
+                wonGift
+            };
+            session.status = 'COMPLETED';
+
+            console.log(`Spin ${sessionId} completed. Value: ${diceValue}`);
+            
+            // Отвечаем в канал (реплай на дайс)
+            const resultText = `User ${session.userId} rolled ${diceValue}! Result: ${symbols.join(" ")}. Win: ${wonGift ? wonGift.name : (isWin ? 'Cash Prize' : 'No')}`;
+            await ctx.telegram.sendMessage(CHANNEL_ID, resultText, { 
+                reply_parameters: { message_id: diceMsg.message_id } 
+            });
         }
-
-        // 3. Если выиграл - добавляем в инвентарь/баланс пользователя (функция addRewardToUser)
-        // await addRewardToUser(session.userId, winAmount, symbols);
-
-        // 4. Финализируем сессию
-        session.result = {
-            diceValue,
-            symbols,
-            isWin,
-            winAmount,
-            wonGift
-        };
-        session.status = 'COMPLETED';
-
-        console.log(`Spin ${sessionId} completed. Value: ${diceValue}`);
-        
-        // Отвечаем в канал (реплай на дайс)
-        const resultText = `User ${session.userId} rolled ${diceValue}! Result: ${symbols.join(" ")}. Win: ${wonGift ? wonGift.name : (isWin ? 'Cash Prize' : 'No')}`;
-        await ctx.telegram.sendMessage(CHANNEL_ID, resultText, { 
-            reply_parameters: { message_id: diceMsg.message_id } 
-        });
+        // === SCENARIO 2: WITHDRAWAL ===
+        else if (type === 'withdrawal' && giftIds) {
+            const withdrawnGifts = await processWithdrawal(payload.userId, giftIds);
+            
+            if (withdrawnGifts.length > 0) {
+                const names = withdrawnGifts.map((g: any) => g.name).join(", ");
+                await ctx.reply(`✅ Withdrawal successful! Sent: ${names}`);
+                // Тут можно отправить отдельное сообщение "Вот ваш подарок"
+            } else {
+                await ctx.reply("❌ Error processing withdrawal. Gifts not found or already withdrawn.");
+            }
+        }
 
     } catch (err) {
         console.error("Payment processing error:", err);
@@ -275,29 +311,26 @@ bot.on(message("successful_payment"), async (ctx) => {
 
 // 1. Создание инвойса (Create Invoice Link)
 app.post("/api/create-invoice", async (req: Request, res: Response) => {
-    const { userId, amount } = req.body; // amount is betAmount
+    const { userId, amount, type, itemData } = req.body; 
+    // itemData = массив giftIds для вывода
 
-    if (!userId || !amount) {
-        return res.status(400).json({ error: "Missing userId or amount" });
+    if (!userId || !amount) return res.status(400).json({ error: "Missing data" });
+
+    const sessionId = uuidv4();
+    
+    // Если это спин - сохраняем сессию
+    if (type === 'spin') {
+        spinSessions[sessionId] = {
+            id: sessionId, userId, betAmount: amount, status: 'CREATED', createdAt: Date.now()
+        };
     }
 
-    // Создаем ID сессии
-    const sessionId = uuidv4();
-
-    // Сохраняем намерение в БД
-    spinSessions[sessionId] = {
-        id: sessionId,
-        userId,
-        betAmount: amount,
-        status: 'CREATED',
-        createdAt: Date.now()
-    };
-
     try {
-        const title = "Spin Slot Machine";
-        const description = `Bet: ${amount} Stars`;
-        // В payload зашиваем sessionId, чтобы найти его при оплате
-        const payload = JSON.stringify({ sessionId, userId });
+        const title = type === 'spin' ? "Spin Slot Machine" : "Withdraw Gifts";
+        const description = type === 'spin' ? `Bet: ${amount} Stars` : `Shipping fee for gifts`;
+        
+        // В payload добавляем type и giftIds
+        const payload = JSON.stringify({ sessionId, userId, type, giftIds: itemData });
 
         const invoiceLink = await bot.telegram.createInvoiceLink({
             title,
@@ -305,7 +338,7 @@ app.post("/api/create-invoice", async (req: Request, res: Response) => {
             payload,
             provider_token: PROVIDER_TOKEN, // Пусто для Stars
             currency: "XTR",
-            prices: [{ label: "Spin", amount: amount }],
+            prices: [{ label: title, amount: amount }],
         });
 
         // Возвращаем клиенту ссылку и ID сессии для отслеживания
@@ -316,7 +349,38 @@ app.post("/api/create-invoice", async (req: Request, res: Response) => {
     }
 });
 
-// 2. Получение статуса/истории (Polling для фронтенда)
+// 2. GET MY GIFTS
+app.get("/api/my-gifts/:userId", (req: Request, res: Response) => {
+    const userId = req.params.userId;
+    const gifts = readGifts();
+    
+    // Фильтруем подарки пользователя
+    const myGifts = gifts.filter((g: any) => g.ownerId == userId && g.status === 'owned');
+
+    // Группируем для фронтенда (как требует GiftCard: { gift: ..., quantity: ... })
+    // Или отправляем плоским списком, а фронт группирует. 
+    // Сделаем группировку здесь для удобства:
+    const grouped: Record<string, any> = {};
+    
+    for (const g of myGifts) {
+        // Группируем по имени или уникальному типу подарка
+        const key = g.name; 
+        if (!grouped[key]) {
+            grouped[key] = { 
+                id: g.id, // ID первого попавшегося (для ключа)
+                gift: { name: g.name, image: g.image, price: g.price }, 
+                quantity: 0,
+                ids: [] // Собираем все ID этой группы для вывода
+            };
+        }
+        grouped[key].quantity++;
+        grouped[key].ids.push(g.id);
+    }
+
+    res.json(Object.values(grouped));
+});
+
+// 3. Получение статуса/истории (Polling для фронтенда)
 // Клиент будет опрашивать этот эндпоинт, чтобы узнать результат спина после оплаты
 app.get("/api/user-spins/:userId", (req, res) => {
     // В реальной БД нужно вернуть последние спины пользователя
@@ -371,7 +435,7 @@ if (fs.existsSync(builtClientPath)) {
   app.use(express.static(builtClientPath));
 
   // Fallback to index.html for SPA routes
-  app.get('*', (req: Request, res: Response) => {
+  app.get(/(.*)/, (req: Request, res: Response) => {
     const indexPath = path.join(builtClientPath, 'index.html');
     if (fs.existsSync(indexPath)) {
       res.sendFile(indexPath);
@@ -390,6 +454,9 @@ if (fs.existsSync(builtClientPath)) {
 // Для продакшена лучше использовать webhook через app.use(bot.webhookCallback(...))
 bot.launch().then(() => {
     console.log("Bot started!");
+}).catch((err) => {
+    console.error("Bot launch failed:", err);
+    // Don't crash the server if bot fails to launch (e.g. network issue)
 });
 
 // Graceful stop

@@ -69,7 +69,9 @@ export default defineConfig({
       "127.0.0.1",
       "::1",
       "localhost:5173",
-      ".ngrok-free.app"  // Allow ngrok tunnels (wildcard for all subdomains)
+      ".ngrok-free.app",  // Allow ngrok tunnels (wildcard for all subdomains)
+      ".lhr.life", // <--- Добавлено разрешение для localhost.run
+      "549bf6168e2d48.lhr.life" // <--- Конкретный хост из вашей ошибки (на всякий случай)
     ],
   },
 });

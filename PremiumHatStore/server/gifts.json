@@ -1,0 +1,34 @@
+[
+  {
+    "id": "g1",
+    "name": "Green Star",
+    "price": 950,
+    "status": "available",
+    "ownerId": null,
+    "image": "🌟"
+  },
+  {
+    "id": "g2",
+    "name": "Delicious Cake",
+    "price": 750,
+    "status": "available",
+    "ownerId": null,
+    "image": "🎂"
+  },
+  {
+    "id": "g3",
+    "name": "Magic Potion",
+    "price": 420,
+    "status": "available",
+    "ownerId": null,
+    "image": "🧪"
+  },
+  {
+    "id": "g4",
+    "name": "Golden Cup",
+    "price": 300,
+    "status": "available",
+    "ownerId": null,
+    "image": "🏆"
+  }
+]
