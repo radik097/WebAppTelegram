@@ -37,7 +37,7 @@ export interface InvoiceResponse {
 }
 
 export async function createInvoice(userId: number, amount: number, type: 'spin' | 'item' = 'spin', itemData?: any): Promise<InvoiceResponse> {
-  const response = await fetch(`${BACKEND_URL}/api/create-invoice`, {
+  const response = await fetch(`${BACKEND_URL}/slots/create-invoice`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

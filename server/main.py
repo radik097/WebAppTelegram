@@ -19,6 +19,7 @@ import hashlib
 from urllib.parse import parse_qs
 import logging
 from dotenv import load_dotenv
+from uuid import uuid4
 
 # Load environment variables from .env file
 load_dotenv()
@@ -92,6 +93,17 @@ class SpinResult(BaseModel):
     isJackpot: bool
     text: Optional[str] = None
     diceMessageId: Optional[int] = None
+    winAmount: Optional[int] = 0
+    wonGift: Optional[Any] = None
+
+
+class SpinSession(BaseModel):
+    id: str
+    userId: int
+    betAmount: int
+    status: str  # CREATED, PAID, COMPLETED, FAILED
+    result: Optional[SpinResult] = None
+    createdAt: float
 
 
 class User(BaseModel):
@@ -148,6 +160,10 @@ def load_dice_mapping() -> Dict[int, List[str]]:
 
 
 DICE_MAPPING = load_dice_mapping()
+
+# In-memory storage for spin sessions (use Redis/DB in production)
+spin_sessions: Dict[str, SpinSession] = {}
+
 
 
 def dice_value_to_symbols(value: int) -> List[str]:
@@ -426,6 +442,18 @@ async def send_slot_dice(request: SpinRequest):
         raise HTTPException(status_code=500, detail=f"Dice send failed: {str(e)}")
 
 
+@app.get("/api/spin-status/{session_id}")
+async def get_spin_status(session_id: str):
+    """
+    Get status of a spin session (polling endpoint)
+    """
+    session = spin_sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return session.dict()
+
+
 @app.post("/api/auth/telegram")
 async def telegram_auth(auth_request: TelegramAuthRequest):
     """
@@ -459,16 +487,31 @@ async def telegram_auth(auth_request: TelegramAuthRequest):
 async def create_slot_invoice(invoice_request: InvoiceRequest):
     """
     Create Telegram Stars payment invoice for slot game
-    Returns invoice URL for Telegram payment
+    Returns invoice URL and sessionId for polling
     """
     if not BOT_TOKEN:
         raise HTTPException(status_code=500, detail="Telegram bot not configured")
     
     bet_amount = invoice_request.bet_amount
-    user_id = invoice_request.user_id or "unknown"
+    user_id = invoice_request.user_id or 0
     
-    # Create invoice payload
-    payload = json.dumps({"userId": user_id, "betAmount": bet_amount})
+    # Create session
+    session_id = str(uuid4())
+    spin_sessions[session_id] = SpinSession(
+        id=session_id,
+        userId=user_id,
+        betAmount=bet_amount,
+        status="CREATED",
+        createdAt=datetime.now().timestamp()
+    )
+    
+    # Create invoice payload with sessionId
+    payload = json.dumps({
+        "userId": user_id, 
+        "betAmount": bet_amount,
+        "sessionId": session_id,
+        "type": "spin"
+    })
     
     # Telegram invoice parameters
     invoice_params = {
@@ -493,7 +536,8 @@ async def create_slot_invoice(invoice_request: InvoiceRequest):
                 raise HTTPException(status_code=500, detail=f"Failed to create invoice: {data}")
             
             invoice_url = data["result"]
-            return {"invoice_url": invoice_url}
+            # Return invoiceUrl (camelCase) to match frontend expectation
+            return {"invoiceUrl": invoice_url, "sessionId": session_id}
             
     except httpx.HTTPError as e:
         logger.error(f"HTTP error creating invoice: {e}")
@@ -555,6 +599,7 @@ async def telegram_webhook(request: Request):
         # Extract userId and betAmount from payload
         user_id = msg.get("from", {}).get("id", chat_id)
         bet_amount = 0
+        session_id = None
         
         if payload:
             try:
@@ -562,6 +607,7 @@ async def telegram_webhook(request: Request):
                     parsed = json.loads(payload)
                     user_id = parsed.get("userId", user_id)
                     bet_amount = parsed.get("betAmount", 0)
+                    session_id = parsed.get("sessionId")
                 else:
                     # Parse naive key:value format
                     parts = payload.replace(',', '|').replace(';', '|').split('|')
@@ -577,9 +623,18 @@ async def telegram_webhook(request: Request):
             except Exception as e:
                 logger.warning(f"Failed to parse invoice payload: {e}")
         
+        # Update session status if exists
+        if session_id and session_id in spin_sessions:
+            spin_sessions[session_id].status = "PAID"
+        
         # Perform spin
         try:
             spin_result = await perform_spin(user_id, bet_amount)
+            
+            # Update session with result
+            if session_id and session_id in spin_sessions:
+                spin_sessions[session_id].result = spin_result
+                spin_sessions[session_id].status = "COMPLETED"
             
             # Send private notification to payer
             try:
@@ -597,6 +652,8 @@ async def telegram_webhook(request: Request):
                 
         except Exception as e:
             logger.error(f"Error performing spin after successful payment: {e}")
+            if session_id and session_id in spin_sessions:
+                spin_sessions[session_id].status = "FAILED"
     
     return {"ok": True}
 

@@ -8,6 +8,10 @@ import { fileURLToPath } from 'url';
 import { Telegraf, Markup } from "telegraf";
 import { message } from "telegraf/filters";
 import { v4 as uuidv4 } from 'uuid';
+import dns from 'node:dns';
+
+// Force IPv4 to avoid timeouts on some networks
+dns.setDefaultResultOrder('ipv4first');
 
 dotenv.config();
 
@@ -455,7 +459,8 @@ if (fs.existsSync(builtClientPath)) {
 bot.launch().then(() => {
     console.log("Bot started!");
 }).catch((err) => {
-    console.error("Bot launch failed:", err);
+    console.error("Bot launch failed:", err.message);
+    console.error("HINT: If you are in a region where Telegram is blocked, please use a VPN or Proxy.");
     // Don't crash the server if bot fails to launch (e.g. network issue)
 });
 
